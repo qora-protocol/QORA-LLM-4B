@@ -1,0 +1,9 @@
+/target
+/.cargo/
+/backup/
+/test_frames/
+*.exe
+*.qor4b
+model.qor4b
+*.py
+*.png

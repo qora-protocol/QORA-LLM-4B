@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            suffix: windows-x86_64
+          - os: ubuntu-22.04
+            suffix: linux-x86_64
+          - os: macos-latest
+            suffix: macos-aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: tar czf qor4b-${{ matrix.suffix }}.tar.gz -C target/release qor4b convert
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path target\release\qor4b.exe,target\release\convert.exe -DestinationPath qor4b-${{ matrix.suffix }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qor4b-${{ matrix.suffix }}
+          path: |
+            *.tar.gz
+            *.zip
+
+  build-gpu:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            suffix: windows-x86_64
+            feature: gpu
+          - os: ubuntu-22.04
+            suffix: linux-x86_64
+            feature: gpu
+          - os: macos-latest
+            suffix: macos-aarch64
+            feature: gpu-metal
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Vulkan SDK (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo apt-get update
+          sudo apt-get install -y vulkan-sdk
+
+      - name: Build GPU
+        run: cargo build --release --features ${{ matrix.feature }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: tar czf qor4b-gpu-${{ matrix.suffix }}.tar.gz -C target/release qor4b convert
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path target\release\qor4b.exe,target\release\convert.exe -DestinationPath qor4b-gpu-${{ matrix.suffix }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qor4b-gpu-${{ matrix.suffix }}
+          path: |
+            *.tar.gz
+            *.zip
+
+  release:
+    needs: [build, build-gpu]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            *.zip
+            *.tar.gz
