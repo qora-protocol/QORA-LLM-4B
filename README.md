@@ -107,10 +107,35 @@ Hard caps apply even to explicit user values. Supports **Windows** (wmic), **Lin
 
 Q4 uses 4-bit symmetric quantization with group_size=32 and LUT-optimized dequantization. Multi-threaded GEMV/GEMM via rayon for large matrices.
 
+## Platform Support
+
+| Platform | Binary | GPU Backend | Status |
+|----------|--------|-------------|--------|
+| **Windows x86_64** | `qor4b.exe` | Vulkan | Tested |
+| **Linux x86_64** | `qor4b` | Vulkan | Supported |
+| **macOS aarch64** | `qor4b` | Metal | Supported |
+
+Pre-built binaries are available on the [Releases](https://github.com/qora-protocol/QORA-LLM-4B/releases) page. GPU is auto-detected — falls back to CPU if unavailable.
+
 ## Quick Start
 
-1. Download `qor4b.exe` (or `qor4b` on Linux/macOS), `model.qor4b`, and `tokenizer.json` into the same folder
-2. Run:
+1. Download from the [Releases](https://github.com/qora-protocol/QORA-LLM-4B/releases) page:
+   - `model.qor4b.part_aa` + `model.qor4b.part_ab` (reassemble below)
+   - `tokenizer.json`
+   - `qor4b.exe` (Windows) or build from source (Linux/macOS)
+
+2. Reassemble the model file:
+
+**Windows (cmd):**
+```cmd
+copy /b model.qor4b.part_aa + model.qor4b.part_ab model.qor4b
+```
+**Linux / macOS:**
+```bash
+cat model.qor4b.part_aa model.qor4b.part_ab > model.qor4b
+```
+
+3. Run:
 
 ```bash
 # Text generation (auto-detects GPU)
@@ -172,12 +197,40 @@ qor4b --prompt "Describe what happens" --video frames/
 
 Frames are loaded in alphabetical order, resized to uniform dimensions (max 768px, divisible by 32), and processed as temporal pairs via Conv3d. Odd frame counts are padded by duplicating the last frame.
 
-## Built With
+## Building from Source
+
+```bash
+# CPU-only (all platforms)
+cargo build --release
+
+# GPU — Windows/Linux (Vulkan)
+cargo build --release --features gpu
+
+# GPU — macOS (Metal)
+cargo build --release --features gpu-metal
+```
+
+### Dependencies
 
 - **Language**: Pure Rust (2024 edition)
-- **Dependencies**: `half` (f16), `rayon` (parallelism), `image` (image loading), `tokenizers` (HuggingFace tokenizer), `memmap2` (mmap for converter), `serde_json` (config parsing), `burn` (GPU backend via wgpu/Vulkan/Metal)
+- `cortex` — Rust deep learning framework (GPU via wgpu/Vulkan/Metal backend)
+- `rayon` — Thread pool for parallel GEMV, attention, lm_head
+- `half` — F16 support
+- `image` — Image loading (PNG/JPG)
+- `tokenizers` — HuggingFace tokenizer
+- `memmap2` — Memory-mapped I/O for converter
+- `serde_json` — Config parsing
 - **No ML framework** for CPU inference — all matrix ops are hand-written Rust
-- **Burn framework** used for GPU tensor operations and binary format types
+- **Cortex framework** used for GPU tensor operations and binary format types
+
+### Cross-Platform Releases
+
+Pre-built binaries are automatically built via GitHub Actions for:
+- **Windows x86_64** — CPU + GPU (Vulkan)
+- **Linux x86_64** — CPU + GPU (Vulkan)
+- **macOS aarch64** — CPU + GPU (Metal)
+
+Create a git tag (e.g. `v0.1.0`) and push to trigger a release build.
 
 ## File Structure
 
