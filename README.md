@@ -1,31 +1,4 @@
----
-license: apache-2.0
-base_model: Qwen/Qwen3.5-4B
-language:
-  - en
-  - zh
-  - multilingual
-library_name: rust
-tags:
-  - text-generation
-  - image-text-to-text
-  - video-text-to-text
-  - multimodal
-  - vision
-  - rust
-  - pure-rust
-  - no-python
-  - quantized
-  - deltanet
-  - hybrid-attention
-  - gpu
-  - vulkan
-  - metal
-pipeline_tag: image-text-to-text
-model-index:
-  - name: QORA-4B
-    results: []
----
+
 
 # QORA-4B
 
@@ -264,3 +237,4 @@ Tested on i5-11500 (6C/12T), 16GB RAM, GTX 1660 SUPER (6GB):
 | GPU support | Yes (Vulkan/Metal) | No (not needed) |
 | Vision | 24L ViT (1024) | 12L ViT (768) |
 | Best for | Desktop, complex reasoning | Mobile, edge, quick tasks |
+
