@@ -78,10 +78,18 @@ fn main() {
         eprintln!("WARNING: {msg}");
     }
 
-    // Auto-adjust: ensure max_tokens > think_budget so model has room to answer
-    if !no_think && max_tokens <= think_budget {
-        max_tokens = think_budget + 1024;
-        eprintln!("Auto-adjusted max-tokens to {} (think-budget + 1024)", max_tokens);
+    // Auto-adjust: ensure enough room for the answer after thinking
+    if !no_think {
+        let min_answer = 256;
+        if max_tokens < think_budget + min_answer {
+            max_tokens = think_budget + min_answer;
+            // Re-apply hard cap
+            if max_tokens > limits.max_tokens {
+                max_tokens = limits.max_tokens;
+            }
+            eprintln!("Auto-adjusted max-tokens to {} (think-budget {} + {} answer room)",
+                max_tokens, think_budget, min_answer);
+        }
     }
 
     let mode_str = if no_think { "no-think" } else { "think" };
