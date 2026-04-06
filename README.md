@@ -107,6 +107,19 @@ Hard caps apply even to explicit user values. Supports **Windows** (wmic), **Lin
 
 Q4 uses 4-bit symmetric quantization with group_size=32 and LUT-optimized dequantization. Multi-threaded GEMV/GEMM via rayon for large matrices.
 
+### AVX-512 SIMD Acceleration
+
+On CPUs with AVX-512 support (Intel 11th gen+, AMD Zen 4+), QORA-4B automatically uses hand-written AVX-512 SIMD kernels for a **~2.5x CPU speedup**:
+
+| Kernel | Technique | Speedup |
+|--------|-----------|---------|
+| **Q4 GEMV** | `permutexvar_ps` 16-entry LUT lookup, nibble extract via `cvtepu8_epi32` | ~2.5x |
+| **F16 GEMV** | `cvtph_ps` f16→f32 + `fmadd_ps` FMA accumulation | ~2.5x |
+| **DeltaNet state** | Vectorized decay/retrieve/delta/output over 128-dim heads | ~3x |
+| **Fused gate+up** | Parallel gate & up SIMD LUT decode in MLP | ~2.5x |
+
+Detection is automatic at runtime — falls back to scalar code on non-AVX-512 CPUs with zero overhead.
+
 ## Platform Support
 
 | Platform | Binary | GPU Backend | Status |
@@ -220,7 +233,7 @@ cargo build --release --features gpu-metal
 - `tokenizers` — HuggingFace tokenizer
 - `memmap2` — Memory-mapped I/O for converter
 - `serde_json` — Config parsing
-- **No ML framework** for CPU inference — all matrix ops are hand-written Rust
+- **No ML framework** for CPU inference — all matrix ops are hand-written Rust with AVX-512 SIMD
 - **Cortex framework** used for GPU tensor operations and binary format types
 
 ### Cross-Platform Releases
@@ -239,6 +252,7 @@ src/
   main.rs           — CLI entry point, argument parsing
   config.rs         — Model architecture configuration
   gemv.rs           — GEMV/GEMM kernels (F16 + Q4), hybrid forward pass, batched prefill
+  simd.rs           — AVX-512 SIMD kernels (Q4/F16 GEMV, DeltaNet, fused MLP)
   generate.rs       — Text generation loop (text, image, video modes)
   tokenizer.rs      — Tokenizer wrapper and chat templates
   vision.rs         — Vision encoder (ViT + merger), image/video loading
@@ -270,8 +284,8 @@ Tested on i5-11500 (6C/12T), 16GB RAM, GTX 1660 SUPER (6GB):
 
 | Task | GPU | CPU |
 |------|-----|-----|
-| Text decode | **~3.3 tok/s** | ~1.3 tok/s |
-| Text prefill (89 tok) | **~4.5 tok/s** | ~1.9 tok/s |
+| Text decode | **~3.3 tok/s** | ~1.3 tok/s (AVX-512) / ~0.54 tok/s (scalar) |
+| Text prefill (89 tok) | **~4.5 tok/s** | ~3.9 tok/s (AVX-512) / ~1.9 tok/s (scalar) |
 | Image encode (256x256) | — | ~90s |
 | Video encode (4 frames) | — | ~180s |
 | Model load (Q4) | ~25s | ~25s |

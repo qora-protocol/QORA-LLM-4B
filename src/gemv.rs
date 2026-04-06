@@ -338,6 +338,26 @@ pub fn embed_lookup(weight: &Weight, token_id: usize, hidden: usize) -> Vec<f32>
 fn gemv_f16(input: &[f32], weight: &F16Weight) -> Vec<f32> {
     let (k, n) = (weight.k, weight.n);
     let w = &weight.data;
+
+    // AVX-512 fast path
+    if crate::simd::has_avx512() {
+        if k * n < 4_000_000 {
+            return unsafe { crate::simd::gemv_f16_avx512(input, w, k, n) };
+        }
+        // Threaded: split across k, each thread uses AVX-512
+        let num_threads = rayon::current_num_threads();
+        let chunk_k = (k + num_threads - 1) / num_threads;
+        let partials: Vec<Vec<f32>> = (0..num_threads).into_par_iter().filter_map(|t| {
+            let k_start = t * chunk_k;
+            let k_end = ((t + 1) * chunk_k).min(k);
+            if k_start >= k { return None; }
+            Some(unsafe { crate::simd::gemv_f16_avx512(&input[k_start..k_end], &w[k_start * n..], k_end - k_start, n) })
+        }).collect();
+        let mut output = vec![0.0f32; n];
+        for p in &partials { for j in 0..n { output[j] += p[j]; } }
+        return output;
+    }
+
     if k * n < 4_000_000 {
         let mut output = vec![0.0f32; n];
         for ki in 0..k {
@@ -392,6 +412,11 @@ fn gemm_f16(x: &[f32], seq_len: usize, weight: &F16Weight) -> Vec<f32> {
 fn gemv_q4_inner(input: &[f32], packed: &[u8], scales: &[f16],
                   _k: usize, n: usize, k_start: usize, k_end: usize) -> Vec<f32> {
     debug_assert!(n % Q4_GROUP_SIZE == 0, "Q4 GEMV: n={n} not divisible by {Q4_GROUP_SIZE}");
+
+    // AVX-512 fast path
+    if crate::simd::has_avx512() {
+        return unsafe { crate::simd::gemv_q4_avx512(input, packed, scales, n, k_start, k_end) };
+    }
     let groups_per_row = n / Q4_GROUP_SIZE;
     let packed_per_group = Q4_GROUP_SIZE / 2;
     let packed_per_row = groups_per_row * packed_per_group;
@@ -443,14 +468,26 @@ fn gemv_q4(input: &[f32], weight: &Q4Weight) -> Vec<f32> {
 
 fn fused_gate_up_q4(input: &[f32], gate_w: &Q4Weight, up_w: &Q4Weight) -> Vec<f32> {
     let (k, n) = (gate_w.k, gate_w.n);
-    let groups_per_row = n / Q4_GROUP_SIZE;
-    let packed_per_group = Q4_GROUP_SIZE / 2;
     let num_threads = rayon::current_num_threads();
     let chunk_k = (k + num_threads - 1) / num_threads;
+    let use_avx512 = crate::simd::has_avx512();
     let partials: Vec<(Vec<f32>, Vec<f32>)> = (0..num_threads).into_par_iter().filter_map(|t| {
         let k_start = t * chunk_k;
         let k_end = ((t + 1) * chunk_k).min(k);
         if k_start >= k { return None; }
+
+        if use_avx512 {
+            return Some(unsafe {
+                crate::simd::fused_gate_up_q4_avx512(
+                    input, &gate_w.packed, &gate_w.scales,
+                    &up_w.packed, &up_w.scales, n, k_start, k_end,
+                )
+            });
+        }
+
+        // Scalar fallback
+        let groups_per_row = n / Q4_GROUP_SIZE;
+        let packed_per_group = Q4_GROUP_SIZE / 2;
         let mut gate_out = vec![0.0f32; n];
         let mut up_out = vec![0.0f32; n];
         for ki in k_start..k_end {
@@ -775,6 +812,7 @@ fn forward_deltanet_decode(
     //    State S[vh] is [k_hd, v_hd] = [128, 128] per V head.
     //    Stored as [v_hd, k_hd] in row-major (our convention).
     let mut y = vec![0.0f32; v_dim]; // output [4096]
+    let use_avx512 = crate::simd::has_avx512();
 
     for vh in 0..num_v {
         let al = alpha[vh];
@@ -784,7 +822,18 @@ fn forward_deltanet_decode(
         let v_h = &v[vh * hd..(vh + 1) * hd];      // [128]
         let s_base = vh * hd * hd;
         let s = &mut state.s[s_base..s_base + hd * hd]; // [hd, hd]
+        let y_base = vh * hd;
 
+        if use_avx512 {
+            unsafe {
+                crate::simd::deltanet_head_update_avx512(
+                    s, q_h, k_h, v_h, al, be, hd, &mut y[y_base..y_base + hd],
+                );
+            }
+            continue;
+        }
+
+        // Scalar fallback
         // Decay state FIRST: S *= alpha
         for val in s.iter_mut() { *val *= al; }
 
@@ -805,7 +854,6 @@ fn forward_deltanet_decode(
         }
 
         // Output: y[vh*hd..(vh+1)*hd] = S @ q_h → [hd]
-        let y_base = vh * hd;
         for r in 0..hd {
             let mut dot = 0.0f32;
             for c in 0..hd { dot += s[r * hd + c] * q_h[c]; }
